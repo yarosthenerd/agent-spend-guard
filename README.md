@@ -2,7 +2,9 @@
 
 **Give your trading agent an allowance, not your wallet.**
 
-Live demo: _see below_ · Solana **devnet** · every button sends a real transaction.
+**Live demo:** https://agent-spend-guard-yaros3920-9222s-projects.vercel.app
+
+Solana **devnet** · every button sends a real transaction · no wallet install needed.
 
 ---
 
