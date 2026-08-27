@@ -4,6 +4,8 @@ import { DECIMALS, agent, connection, memoIx, mint, multisigDelegate, owner, pol
 import { prices } from "./oracle";
 import type { Outcome } from "./mandate";
 
+export class SimulationError extends Error {}
+
 export const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 export const MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 const LABEL: Record<string, string> = { [TOKEN_PROGRAM]: "spl-token", [MEMO_PROGRAM]: "memo" };
@@ -88,6 +90,16 @@ export async function simulate(s: Swap): Promise<Outcome> {
     replaceRecentBlockhash: true,
     accounts: { encoding: "base64", addresses: vaultAtas.map((a) => a.toBase58()) },
   });
+
+  if (sim.value.err && !sim.value.accounts?.length) {
+    const logs = (sim.value.logs ?? []).join(" ");
+    const code = logs.match(/custom program error: (0x[0-9a-f]+)/)?.[1] ?? JSON.stringify(sim.value.err);
+    throw new SimulationError(
+      code === "0x1"
+        ? "The vault's delegated allowance is too small to even simulate this trade."
+        : `Simulation failed (${code}).`,
+    );
+  }
 
   const after = (sim.value.accounts ?? []).map((acc, i) => {
     if (!acc) return before[i];

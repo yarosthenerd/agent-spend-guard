@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import { compile, evaluate } from "@/lib/mandate";
 import { simulate, type Swap } from "@/lib/preflight";
 import { prices } from "@/lib/oracle";
-import { vaultState } from "@/lib/solana";
+import { ensureAllowance, vaultState } from "@/lib/solana";
 export const dynamic = "force-dynamic";
 
 /** Trade sizes are derived from the live oracle so the demo prices itself off real data. */
@@ -48,6 +48,7 @@ export async function POST(req: Request) {
     const sc = (await scenarios())[scenario];
     if (!sc) return NextResponse.json({ error: "unknown scenario" }, { status: 400 });
 
+    await ensureAllowance();
     const m = compile(src);
     const outcome = await simulate(sc.swap);
     const findings = evaluate(m, outcome);

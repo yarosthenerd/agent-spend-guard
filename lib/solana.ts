@@ -77,5 +77,21 @@ export async function vaultState() {
   };
 }
 
+/**
+ * Demo affordance: the vault's allowance is topped back up when it runs low, so the
+ * hosted demo keeps working however many times it is clicked. Not a production behaviour.
+ */
+export async function ensureAllowance(min = 1000, target = 5000) {
+  const { getAssociatedTokenAddress, createApproveCheckedInstruction } = await import("@solana/spl-token");
+  const st = await vaultState();
+  if (st.delegateIsMultisig && st.allowanceRemaining >= min) return null;
+  const o = owner();
+  const ata = await getAssociatedTokenAddress(mint(), o.publicKey);
+  return send([
+    memoIx(`mandate:top-up:${target}`, o.publicKey),
+    createApproveCheckedInstruction(ata, mint(), multisigDelegate(), o.publicKey, toBase(target), DECIMALS),
+  ], [o]);
+}
+
 export const explorer = (sig: string) => `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
 export const explorerAddr = (a: string) => `https://explorer.solana.com/address/${a}?cluster=devnet`;

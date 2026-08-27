@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { compile, evaluate } from "@/lib/mandate";
 import { buildSoloSwap, buildSwap, simulate } from "@/lib/preflight";
-import { explorer, send, vaultState } from "@/lib/solana";
+import { ensureAllowance, explorer, send, vaultState } from "@/lib/solana";
 import { scenarios } from "../preflight/route";
 export const dynamic = "force-dynamic";
 
@@ -15,6 +15,8 @@ export async function POST(req: Request) {
     const { mandate: src, scenario, solo = false } = await req.json();
     const sc = (await scenarios())[scenario];
     if (!sc) return NextResponse.json({ error: "unknown scenario" }, { status: 400 });
+
+    await ensureAllowance();
 
     if (solo) {
       const { ixs, coSigners } = await buildSoloSwap(sc.swap);
