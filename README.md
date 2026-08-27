@@ -9,18 +9,24 @@ Solana **devnet** · live Pyth oracle read on-chain · 2-of-2 SPL Token multisig
 
 ---
 
-## The five things worth knowing
+## The seven things worth knowing
 
 1. **We solve a gap nobody above us has taken.** Every shipping agent control is denominated in transfer
-   amounts. None of them value what the vault receives. An agent can lose a vault without exceeding one limit.
+   amounts. None of them value what the vault receives, so an agent can lose money without exceeding one limit.
 2. **The verifier cannot be skipped by the thing it verifies.** The vault's delegate is a 2-of-2 SPL Token
    multisig, so the token program itself rejects any transfer the policy service hasn't co-signed. Verified
    on devnet: the agent signing alone gets `custom program error: 0x4`.
-3. **The oracle is real.** SOLX is priced from the Pyth SOL/USD account read directly from devnet RPC. The
-   slippage rule fires on a genuine reference price, not a constant we picked.
-4. **We concede the primitive loudly.** The Foundation's audited Allowances program shipped the spend ceiling
+3. **The oracle is real.** The Pyth SOL/USD account is read directly from devnet RPC, and the slippage rule
+   fires on that reference rather than a constant we picked. SOLX is our own mint standing in for SOL, which
+   is the demo's one substitution and is labelled as such.
+4. **The mandate counter-offers instead of only refusing.** When the price is the only problem, the policy
+   service rewrites the trade to the worst fill the mandate permits and co-signs that transaction alone —
+   structurally identical to binding `minOutAmount` before signing.
+5. **The kill switch proves itself.** Revoke is one instruction enforced by the token program, and after
+   revoking we attempt a fully co-signed transfer and report the on-chain rejection.
+6. **We concede the primitive loudly.** The Foundation's audited Allowances program shipped the spend ceiling
    in June 2026. We assume it underneath rather than compete with it, and we say so on the landing page.
-5. **Every verdict is recorded, allows included.** A checkable track record of constrained execution is the
+7. **Every verdict is recorded, allows included.** A checkable track record of constrained execution is the
    only asset in this category that compounds.
 
 ---
