@@ -8,12 +8,13 @@ export type Constraint =
   | { kind: "slippage"; maxPct: number }
   | { kind: "maxTrade"; amount: number }
   | { kind: "concentration"; maxPct: number }
-  | { kind: "drawdown"; maxPct: number };
+  | { kind: "drawdown"; maxPct: number }
+  | { kind: "priceable" };
 
 export type Mandate = { source: string; constraints: Constraint[]; errors: string[] };
 
 export const DEFAULT_MANDATE = `allow programs: spl-token, memo
-allow mints: gUSD, SOLX
+require oracle pricing
 max slippage 2%
 max trade 500 gUSD
 max position 25% of vault
@@ -36,6 +37,8 @@ export function compile(source: string): Mandate {
       constraints.push({ kind: "programs", allow: splitList(m[1]) });
     else if ((m = line.match(/^allow\s+mints?\s*:\s*(.+)$/i)))
       constraints.push({ kind: "mints", allow: splitList(m[1]) });
+    else if (/^require\s+oracle\s+pricing$/i.test(line))
+      constraints.push({ kind: "priceable" });
     else if ((m = line.match(/^max\s+slippage\s+([\d.]+)\s*%$/i)))
       constraints.push({ kind: "slippage", maxPct: parseFloat(m[1]) });
     else if ((m = line.match(/^max\s+trade\s+([\d.]+)\s*\w*$/i)))
@@ -54,7 +57,7 @@ const splitList = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolea
 /** What the simulation says will actually happen, in value terms. */
 export type Outcome = {
   programIds: string[];
-  legs: { symbol: string; mint: string; delta: number; price: number; value: number }[];
+  legs: { symbol: string; mint: string; delta: number; price: number; value: number; priceable: boolean; source: string }[];
   valueOut: number;
   valueIn: number;
   slippagePct: number;
@@ -91,12 +94,29 @@ export function evaluate(m: Mandate, o: Outcome): Finding[] {
         });
         break;
       }
+      case "priceable": {
+        const held = o.legs.filter((l) => l.delta > 0);
+        const bad = held.filter((l) => !l.priceable);
+        f.push({
+          constraint: "require oracle pricing",
+          ok: bad.length === 0,
+          detail: bad.length
+            ? `vault would end up holding ${bad.map((b) => b.symbol).join(", ")}, which no approved oracle prices — the position cannot be valued, so it cannot be risk-checked`
+            : held.length
+            ? `${held.map((h) => `${h.symbol} priced by ${h.source}`).join("; ")}`
+            : "no new positions",
+        });
+        break;
+      }
       case "slippage": {
-        const ok = o.slippagePct <= c.maxPct;
+        const unpriced = o.legs.some((l) => l.delta > 0 && !l.priceable);
+        const ok = !unpriced && o.slippagePct <= c.maxPct;
         f.push({
           constraint: `max slippage ${c.maxPct}%`,
           ok,
-          detail: `paid ${fmt(o.valueOut)} for ${fmt(o.valueIn)} of value — ${o.slippagePct.toFixed(1)}% loss at reference price`,
+          detail: unpriced
+            ? "cannot be evaluated: part of what the vault receives has no oracle price"
+            : `paid ${fmt(o.valueOut)} for ${fmt(o.valueIn)} at oracle reference — ${o.slippagePct.toFixed(1)}% below reference`,
         });
         break;
       }

@@ -1,6 +1,6 @@
 # Mandate
 
-**Spending caps check the amount. Mandates check the outcome.**
+**Every agent control on Solana asks how much. None of them ask what you got back.**
 
 **Live demo:** https://agent-spend-guard-yaros3920-9222s-projects.vercel.app
 
@@ -12,14 +12,16 @@ Solana **devnet** · every verdict comes from a real `simulateTransaction` again
 
 Every agent spending control shipping today is denominated in **transfer amounts**:
 
-- **Solana Foundation — Subscriptions & Allowances** (audited, mainnet, June 2 2026): a cumulative cap plus expiry.
-- **Squads v5 spending limits**: per-period amount caps.
-- **Swig policy roles**: which programs an agent may call.
-- Every "agent wallet with guardrails" launched this year, including our own first version.
+- **Solana Foundation — Subscriptions & Allowances** (audited by Cantina/Spearbit, mainnet, June 2 2026):
+  cumulative cap, expiry, multi-delegate, Token-2022 including confidential transfers.
+- **Squads v5 hooks**: program whitelists, per-period caps, approval thresholds by transaction type.
+- **Swig**: an on-chain policy engine over roles, assets and program interactions.
+- **Turnkey / Privy / Ledger Agent Stack**: scoped keys and hardware approval.
 
-An agent can lose 100% of a vault **without exceeding any of them**. Swap into a worthless mint. Eat 40%
-slippage. Get sandwiched. Over-concentrate into one position. LP into a rug. Every one of those transactions
-is fully authorized and within budget. The cap asks *how much*. It never asks *in exchange for what*.
+Between them they cover *who* may act, *where*, and *how much*. **None of them value what the vault receives.**
+So an agent can lose a vault without exceeding a single limit: take a 40% worse fill than the oracle reference,
+or end up holding a position nothing can price. Every one of those transactions is fully authorized and inside
+budget. The cap asks *how much*. It never asks *in exchange for what*.
 
 This is not hypothetical. The 2026 agent losses were not ceiling breaches. In the Bankr/Grok incident the
 transfer limits were **bypassed by permission escalation, not exceeded** — every transaction was authorized,
@@ -41,41 +43,69 @@ max position 25% of vault
 halt on drawdown 10%
 ```
 
-## The demo, and the test that matters
+## The claim, scoped so it survives a reader who knows the changelogs
 
-Our previous version tested a 5,000 drain against a 500 allowance. The chain blocked it. That was the wrong
-test — **a real attacker takes exactly 500.** So that is what the demo does now:
+The temptation is to say the incumbents would wave these trades through. That is not true and would sink the
+rest of the argument: Squads v5 hooks ship program whitelists, and Swig's roles cover specific assets and
+program interactions. Either can block an unknown mint.
 
-> The agent proposes swapping its **entire 500 gUSD allowance** into a worthless mint at a 40% loss.
-> It exceeds no limit. It spends precisely what it was authorized to spend.
+The defensible claim is narrower and enough:
 
-| Control | Checks | Verdict |
+| Control | What it checks | Values the fill? |
 |---|---|---|
-| Foundation Allowances (fixed delegation) | cumulative cap + expiry | **allow** |
-| Squads v5 spending limits | per-period amount cap | **allow** |
-| Swig policy roles | which programs may be called | **allow** |
-| Spend-Guard v1 (SPL delegate ceiling) | cumulative cap | **allow** |
-| **Mandate** | **simulated outcome** | **block** |
+| Foundation — Subscriptions & Allowances | cumulative cap, expiry, multi-delegate | no |
+| Squads v5 — hooks | program whitelist, per-period caps, approval thresholds | no |
+| Swig — policy roles | which programs and assets an agent may touch | no |
+| Turnkey / Ledger Agent Stack | who holds the key, which device approves | no |
+| **Mandate** | **the simulated outcome, valued against an oracle** | **yes** |
 
-Mandate's own amount constraint (`max trade 500 gUSD`) **passes** — that is deliberate. The block comes from
-`allow mints` and `max slippage`, evaluated against the simulated result. Amount checking is not the contribution.
+They check *who*, *where*, and *how much*. None of them check what came back.
 
-There is an **override** button. Press it and the transaction really settles on devnet and the value really
-leaves the vault, with an explorer link. The block is not theater.
+## Three rules, three demos
+
+Each button is a distinct constraint, so "mandate" reads as a category rather than one hardcoded check.
+
+1. **Buy SOLX at the reference price** — fill within 0.4% of the live Pyth SOL/USD feed. Every constraint
+   passes, the policy service co-signs, it settles on devnet.
+2. **Buy SOLX 40% below reference** — a real mint, a real feed, a real implied execution price 40% off.
+   `max slippage 2%` fires. Nothing about this is estimated: the reference comes from the on-chain Pyth
+   account and the fill comes from the simulated post-state.
+3. **Swap the allowance into an unpriceable mint** — no approved oracle publishes a price, so the resulting
+   position cannot be valued at all. `require oracle pricing` fires. This is deliberately *not* a mint
+   allowlist, which is the commoditized version of the same idea; it is a rule about whether the vault can
+   still be risk-checked after the trade.
+
+Rule 2 is the one that proves the thesis, because every input to it is real. Note that the amount constraint
+(`max trade 500 gUSD`) **passes** in both blocked cases. Amount checking is not the contribution.
+
+## Every verdict is recorded, allows included
+
+Each decision writes a structured record: mandate hash, scenario, simulated deltas, which rule fired, verdict,
+timestamp. Allows are recorded as deliberately as blocks — a track record of constrained execution that a third
+party can check is the only asset in this category that compounds, and it is what the Agent Registry's
+Validation Registry exists to anchor. Session-local in this build; anchoring it to the agent's on-chain
+identity is the next step.
 
 ## Honest limits
 
-- **Enforcement is pre-flight, not on-chain.** Mandate stops a *misbehaving* agent, not a *compromised* one:
-  an attacker holding the agent key can bypass this service and sign directly, bounded only by the delegate
-  ceiling underneath. Moving these constraints into an audited program that custodies the capital is the next
-  layer, and it is the actual product. Advisory first, on-chain as the constraint set proves itself.
+- **Constraint evaluation is still off-chain.** What is on-chain is the *requirement that the policy service
+  sign at all*. A compromised policy key is the remaining trust assumption. Moving evaluation itself into an
+  audited program is the next layer, and it is the actual product.
+- **Slippage bounds are checked at approval, not at execution.** Against a real AMM the fix is to rewrite
+  `minOutAmount` to whatever the mandate permits before co-signing, so the AMM enforces the bound at execution
+  time rather than our RPC call enforcing it at approval time. Our two-leg swap has no `minOut` field to bind,
+  so this is documented rather than demonstrated.
 - **We do not compete on the allowance primitive.** The Foundation's program is free, audited, multi-delegate
   and Token-2022 compatible. We assume it underneath rather than reimplement it.
-- **The mandate grammar is deterministic, not a language model.** A natural-language front-end is the obvious
-  next layer; faking it with no model behind it would be a demo, not a check.
-- **Reference prices for the demo mints are quoted constants**, labelled as such in the UI. The same field is
-  populated from Pyth Hermes for real mints.
-- **Incumbent verdicts are modelled from public documentation**, not live integrations.
+- **The mandate grammar is deterministic by design, not by constraint.** A mandate is a security artifact: it
+  has to be reviewable, diffable, and hashable into an audit record. Natural language belongs *above* it as
+  authoring sugar, never underneath it as the source of truth. That is the position we would hold with
+  unlimited time, not a limitation we are working around.
+- **SOLX is priced from a live Pyth feed read on-chain** (devnet SOL/USD, account
+  `J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix`). gUSD is the unit of account and quoted at par by definition.
+  SCAM has no feed, which is the point of the third rule rather than a gap.
+- **What other products check is described from public documentation**, not live integrations — and the claim
+  is deliberately narrow. See below.
 - Keys are server-held so judges can click through without a wallet. Nothing in the design requires it.
 
 ## Why this is defensible
@@ -92,10 +122,14 @@ and what got blocked, which is exactly the corpus the Agent Registry's Validatio
 ## How it works
 
 1. `lib/mandate.ts` — grammar, compiler, and evaluator over an `Outcome`.
-2. `lib/preflight.ts` — builds the trade as an atomic two-leg swap, runs `simulateTransaction` with account
-   inspection, decodes `AccountLayout` post-state, and derives value deltas, slippage, concentration, drawdown.
-3. `app/api/preflight` — compile, simulate, evaluate, and compute the incumbent comparison.
-4. `app/api/execute` — signs **only** if the simulated outcome satisfies the mandate, unless explicitly overridden.
+2. `lib/oracle.ts` — reads Pyth price accounts directly from devnet RPC and reports unpriceable mints as such.
+3. `lib/preflight.ts` — builds the trade as an atomic two-leg swap authorised by the multisig delegate, then
+   simulates it unsigned (`sigVerify: false`, `replaceRecentBlockhash: true`, `accounts` listing the vault's
+   token accounts), decodes `AccountLayout` post-state, and derives value deltas, slippage, concentration
+   and drawdown.
+4. `app/api/preflight` — compile, simulate, value against the oracle, evaluate, record.
+5. `app/api/execute` — the policy service co-signs **only** if the simulated outcome satisfies the mandate.
+   `solo: true` demonstrates the agent attempting to sign without it, which the token program rejects.
 
 ## Run it
 
@@ -103,6 +137,7 @@ and what got blocked, which is exactly the corpus the Agent Registry's Validatio
 npm install --ignore-scripts
 node scripts/setup.mjs    # gUSD mint, vault, delegate funding
 node scripts/setup2.mjs   # SOLX and SCAM mints, venue inventory
+node scripts/ms-test.mjs  # creates the 2-of-2 multisig delegate and proves both directions
 npm run dev
 ```
 

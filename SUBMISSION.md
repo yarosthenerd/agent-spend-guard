@@ -1,11 +1,11 @@
 # Submission
 
 ## One-line pitch
-Spending caps check the amount. Mandates check the outcome.
+Every agent control on Solana asks how much. None of them ask what you got back.
 
 ## Alternates
-- Your agent didn't exceed its limit. It still lost everything.
-- Every agent control on Solana asks how much. None of them ask in exchange for what.
+- Spending caps check the amount. Mandates check the fill.
+- Your agent didn't exceed its limit. It still lost 40% of the trade.
 
 ## Short description (~60 words)
 Every AI-agent spending control on Solana is denominated in transfer amounts. An agent can lose a whole vault

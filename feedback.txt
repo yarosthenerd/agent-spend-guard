@@ -115,3 +115,51 @@ If the full build is too heavy right now, start with the piece that generates th
 A mandate compiler and pre-flight verifier. The owner writes what the agent is allowed to do in plain language. You compile it into machine-checkable constraints, simulate every agent transaction against them before it lands, and block or flag mismatches. Ship it as an MCP server and a Solana Agent Kit plugin so it sits inside the workflow developers already use. Enforcement starts advisory, moves on-chain as you learn what constraints actually matter.
 
 This is closer to your existing work, it's cheap, it produces the corpus, and the natural language layer is the one place an incumbent wallet company is genuinely weak. It's a wedge, not a business, so treat revenue from it as validation signal rather than the plan.
+
+
+
+
+
+
+
+
+
+
+Thought for 1m 3s
+
+This is a much better plan than the one it replaces, and the instinct behind it is right: concede the primitive loudly, then compete on the check nobody else performs. The pitch line does real work. Below are the notes I'd act on, roughly in order of how much damage they prevent.
+1. The architecture has a hole where enforcement should be
+
+In v1 the agent signs its own trades. A pre-flight verifier that only inspects can be skipped by the thing it's verifying. The README concession says it stops a misbehaving agent but not a compromised one, and that undersells the problem: unless the agent is architecturally unable to submit without you, the verifier is a linter, and the first sharp question you get will be "what stops the agent from just not calling you?"
+
+There's a fix that costs one instruction and no custom program: make the delegate an SPL Token multisig account (2-of-2: agent + policy service) rather than a plain agent pubkey. The token program then refuses any transfer that lacks the policy signature. Enforcement moves from your service to the token program, which is exactly the framing that made the original demo compelling, except this time the claim is true for the interesting checks rather than only the ceiling. Verify the multisig-as-delegate path against current spl-token before betting the demo on it, but if it holds, it converts your weakest sentence into your strongest one.
+2. The four-way comparison is the same overclaim that killed v1
+
+"Squads passes it. Swig passes it." Squads v5 ships hooks with program whitelists, and Swig's permissions cover specific assets and program interactions. Both can plausibly block an unknown mint. If a judge knows that, the table reads as sloppy and takes the rest of the pitch with it.
+
+Scope the comparison to the claim you can defend: none of them evaluate execution price against a reference. Not "they'd let this through," but "they check who, where, and how much; none of them check what you got back." Same rhetorical punch, survives contact with someone who reads the Squads changelog.
+3. The headline demo has a pricing problem, and the fix is better than the original
+
+You can't compute slippage against an oracle for a worthless mint, because there's no feed. Trying to will either force a fake number or collapse into a mint allowlist check, which is the commoditized version.
+
+Split it into two buttons, each a distinct rule:
+
+    Unpriceable output. The mandate requires every resulting position to be priceable by an approved oracle. Simulation shows the vault ending up holding a mint with no feed, so it blocks. No fake math, and the rule is defensible on its own merits.
+    Bad execution on a priceable pair. Real mint, real Pyth feed, implied execution price 40% off reference, blocked. This is the one that proves the thesis, because every input to it is real.
+
+Two rules also demonstrates that "mandate" is a category rather than a single hardcoded check.
+4. Simulate to decide, then bind the decision into the transaction
+
+Simulation tells you what would happen against a state that may have moved by the time the transaction lands. For swaps, don't just approve the transaction, require and rewrite minOutAmount to whatever the mandate permits before it's signed. Then the AMM enforces your slippage bound at execution, not your RPC call at approval time. Cheap to implement, and it's another place where the enforcement moves off your service.
+
+Mechanically: simulateTransaction with sigVerify: false, replaceRecentBlockhash: true, and the accounts parameter listing the vault's token accounts gets you true post-state balances on an unsigned transaction.
+5. Log every verdict, including the allows
+
+Each decision (mandate hash, transaction, simulated deltas, rule fired, verdict) written to the Activity panel as a structured record. This costs almost nothing and it's the seed of the only asset in this space that compounds: a track record of constrained execution that a third party can check. If you ever want the version of this business that gets paid in basis points rather than seats, that record is the product. One line in the README pointing at it is enough for now.
+6. Smaller things
+
+    Cite the Foundation program by ID in the Layer 0 note. Showing you know it by address, not by press release, is the credibility move.
+    Reframe dropping the NL front-end. "No API key" sounds like a limitation. The better version: a mandate is a security artifact that has to be reviewable and diffable, so it compiles from a constrained grammar, and natural language sits above it as authoring sugar. That's a design position, and it's the one you'd defend even with unlimited time.
+    If you run out of clock, cut in this order: oracle slippage rule, program allowlist, grammar polish. Protect the simulation-plus-delta core and the comparison panel. Those two are the entire argument.
+
+The thing I'd want you to leave with: the plan currently wins the argument about what to check and loses the argument about who enforces it. Point 1 closes that, and it's an hour's work at most.

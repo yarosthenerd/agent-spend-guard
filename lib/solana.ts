@@ -20,6 +20,9 @@ export const owner = () => kp("OWNER_SECRET");
 export const agent = () => kp("AGENT_SECRET");
 export const venue = () => new PublicKey(process.env.VENUE_PUBKEY!);
 export const venueKp = () => kp("VENUE_SECRET");
+/** The policy service co-signer. Half of the 2-of-2 SPL Token multisig delegate. */
+export const policyKp = () => kp("POLICY_SECRET");
+export const multisigDelegate = () => new PublicKey(process.env.MULTISIG_DELEGATE!);
 export const mint = () => new PublicKey(process.env.MINT!);
 
 export const toBase = (ui: number) => BigInt(Math.round(ui * 10 ** DECIMALS));
@@ -65,6 +68,9 @@ export async function vaultState() {
     vaultBalance: toUi(acct.amount),
     venueBalance: toUi(venueBal),
     delegate: acct.delegate ? acct.delegate.toBase58() : null,
+    multisigDelegate: process.env.MULTISIG_DELEGATE ?? null,
+    policyPubkey: policyKp().publicKey.toBase58(),
+    delegateIsMultisig: acct.delegate?.toBase58() === process.env.MULTISIG_DELEGATE,
     // The hard on-chain ceiling. SPL Token itself refuses any delegated spend above this.
     allowanceRemaining: acct.delegate ? toUi(acct.delegatedAmount) : 0,
     agentIsDelegate: acct.delegate?.equals(agent().publicKey) ?? false,

@@ -9,6 +9,7 @@
     "setup": "node --experimental-strip-types scripts/setup.ts"
   },
   "dependencies": {
+    "@pythnetwork/client": "^2.22.1",
     "@solana/spl-token": "^0.4.9",
     "@solana/web3.js": "^1.95.8",
     "bs58": "^6.0.0",
