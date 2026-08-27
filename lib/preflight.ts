@@ -1,6 +1,6 @@
 import { PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { AccountLayout, createTransferCheckedInstruction, getAssociatedTokenAddress } from "@solana/spl-token";
-import { DECIMALS, agent, connection, memoIx, mint, multisigDelegate, owner, policyKp, venueKp } from "./solana";
+import { DECIMALS, agent, connection, memoIx, mint, multisigDelegate, owner, policyKp, retry, venueKp } from "./solana";
 import { prices } from "./oracle";
 import type { Outcome } from "./mandate";
 
@@ -81,15 +81,15 @@ export async function simulate(s: Swap): Promise<Outcome> {
   // Unsigned simulation: signature checks off, blockhash replaced by the node.
   const msg = new TransactionMessage({
     payerKey: agent().publicKey,
-    recentBlockhash: (await c.getLatestBlockhash("confirmed")).blockhash,
+    recentBlockhash: (await retry(() => c.getLatestBlockhash("confirmed"))).blockhash,
     instructions: ixs,
   }).compileToV0Message();
 
-  const sim = await c.simulateTransaction(new VersionedTransaction(msg), {
+  const sim = await retry(() => c.simulateTransaction(new VersionedTransaction(msg), {
     sigVerify: false,
     replaceRecentBlockhash: true,
     accounts: { encoding: "base64", addresses: vaultAtas.map((a) => a.toBase58()) },
-  });
+  }));
 
   if (sim.value.err && !sim.value.accounts?.length) {
     const logs = (sim.value.logs ?? []).join(" ");
