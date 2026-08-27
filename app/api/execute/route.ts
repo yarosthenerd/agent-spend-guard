@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { compile, evaluate } from "@/lib/mandate";
 import { buildSoloSwap, buildSwap, simulate } from "@/lib/preflight";
 import { ensureAllowance, explorer, send, vaultState } from "@/lib/solana";
-import { scenarios } from "../preflight/route";
+import { repairFor, scenarios } from "../preflight/route";
+import { prices } from "@/lib/oracle";
 export const dynamic = "force-dynamic";
 
 /**
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(req: Request) {
   try {
-    const { mandate: src, scenario, solo = false } = await req.json();
+    const { mandate: src, scenario, solo = false, repair = false } = await req.json();
     const sc = (await scenarios())[scenario];
     if (!sc) return NextResponse.json({ error: "unknown scenario" }, { status: 400 });
 
@@ -36,7 +37,20 @@ export async function POST(req: Request) {
       }
     }
 
-    const findings = evaluate(compile(src), await simulate(sc.swap));
+    const m = compile(src);
+    let swap = sc.swap;
+    const findings0 = evaluate(m, await simulate(swap));
+
+    // Repair: co-sign the corrected trade rather than the one the agent proposed.
+    let repaired: any = null;
+    if (repair) {
+      const px = await prices(["gUSD", "SOLX", "SCAM"]);
+      repaired = repairFor(m, findings0, swap, px);
+      if (!repaired) return NextResponse.json({ ok: false, reason: "nothing to repair here", state: await vaultState() });
+      swap = { ...swap, receiveAmount: repaired.minimum };
+    }
+
+    const findings = repair ? evaluate(m, await simulate(swap)) : findings0;
     const blocked = findings.filter((f) => !f.ok);
     if (blocked.length)
       return NextResponse.json({
@@ -45,8 +59,8 @@ export async function POST(req: Request) {
         state: await vaultState(),
       });
 
-    const { ixs, coSigners } = await buildSwap(sc.swap);
+    const { ixs, coSigners } = await buildSwap(swap);
     const sig = await send(ixs, coSigners);
-    return NextResponse.json({ ok: true, sig, explorer: explorer(sig), findings, state: await vaultState() });
+    return NextResponse.json({ ok: true, sig, explorer: explorer(sig), findings, repaired, state: await vaultState() });
   } catch (e: any) { return NextResponse.json({ error: e.message }, { status: 500 }); }
 }

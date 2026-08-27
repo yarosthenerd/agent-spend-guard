@@ -15,6 +15,7 @@ type Price = { symbol: string; priceable: boolean; price?: number; source?: stri
 type Result = {
   scenario: string; label: string; note: string; blocked: boolean; mandateHash: string; ts: string;
   outcome: { legs: Leg[]; valueOut: number; valueIn: number; slippagePct: number; programIds: string[] };
+  repair: { constraint: string; symbol: string; proposed: number; minimum: number; reference: number } | null;
   findings: Finding[];
   controls: { name: string; checks: string; pricesFill: boolean }[];
   oracle: Record<string, Price>;
@@ -39,23 +40,36 @@ export default function Page() {
   const [busy, setBusy] = useState<string | null>(null);
   const [exec, setExec] = useState<{ ok: boolean; msg: string; explorer?: string } | null>(null);
   const [audit, setAudit] = useState<Record_[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  const call = useCallback(async (path: string, body?: any) => {
+    try {
+      const r = await fetch(path, body
+        ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
+        : { cache: "no-store" });
+      const j = await r.json();
+      if (j.error) { setErr(j.error); return null; }
+      setErr(null);
+      return j;
+    } catch (e: any) {
+      setErr(`Could not reach the server: ${e.message}. Public devnet RPC rate-limits; try again in a moment.`);
+      return null;
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
-    const r = await fetch("/api/state", { cache: "no-store" });
-    if (r.ok) setS(await r.json());
-  }, []);
+    const j = await call("/api/state");
+    if (j) setS(j);
+  }, [call]);
   useEffect(() => { refresh(); }, [refresh]);
 
   const log = (r: Record_) => setAudit((a) => [r, ...a].slice(0, 40));
 
   async function preflight(id: string) {
     setBusy(id); setExec(null);
-    const r: Result = await fetch("/api/preflight", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mandate, scenario: id }),
-    }).then((x) => x.json());
+    const r: Result = await call("/api/preflight", { mandate, scenario: id });
     setBusy(null);
-    if ((r as any).error) return;
+    if (!r) return;
     setS(r.state); setRes(r);
     log({
       ts: r.ts, scenario: id, hash: r.mandateHash,
@@ -66,23 +80,45 @@ export default function Page() {
     });
   }
 
-  async function execute(solo: boolean) {
+  async function execute(solo: boolean, repair = false) {
     if (!res) return;
     setBusy("exec");
-    const r = await fetch("/api/execute", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mandate, scenario: res.scenario, solo }),
-    }).then((x) => x.json());
+    const r = await call("/api/execute", { mandate, scenario: res.scenario, solo, repair });
+    if (!r) { setBusy(null); return; }
     if (r.state) setS(r.state);
     const msg = r.ok
-      ? solo ? "Settled without the policy service — this should not happen." : "Policy service co-signed. Settled on devnet."
+      ? solo
+        ? "Settled without the policy service — this should not happen."
+        : r.repaired
+        ? `Co-signed the repaired trade: at least ${r.repaired.minimum} ${r.repaired.symbol} instead of the ${r.repaired.proposed} the agent proposed. The agent never got a signature for its own version.`
+        : "Policy service co-signed. Settled on devnet."
       : r.reason ?? r.error ?? "failed";
     setExec({ ok: r.ok, msg, explorer: r.explorer });
     log({
       ts: new Date().toISOString(), scenario: res.scenario, hash: res.mandateHash,
-      verdict: r.ok ? "SETTLED" : solo ? "REJECTED ON-CHAIN" : "REFUSED TO CO-SIGN",
+      verdict: r.ok ? (r.repaired ? "REPAIRED" : "SETTLED") : solo ? "REJECTED ON-CHAIN" : "REFUSED TO CO-SIGN",
       detail: msg, explorer: r.explorer,
     });
+    setBusy(null);
+  }
+
+  async function revoke() {
+    setBusy("revoke");
+    const r = await call("/api/revoke", {});
+    if (!r) { setBusy(null); return; }
+    if (r.state) setS(r.state);
+    setExec({ ok: !!r.ok, msg: r.ok ? r.proof : r.error ?? "failed", explorer: r.explorer });
+    log({
+      ts: new Date().toISOString(), scenario: "kill switch", hash: "—",
+      verdict: r.ok ? "REVOKED" : "FAILED", detail: r.ok ? r.proof : r.error, explorer: r.explorer,
+    });
+    setBusy(null);
+  }
+
+  async function reset() {
+    setBusy("reset");
+    const r = await call("/api/reset", {});
+    if (r) { setS(r.state); setRes(null); setExec(null); setAudit([]); setMandate(DEFAULT_MANDATE); }
     setBusy(null);
   }
 
@@ -102,6 +138,18 @@ export default function Page() {
           the agent may do, simulates the transaction against devnet, values the result against a live oracle, and
           co-signs only if the outcome holds up.
         </p>
+        {err && (
+          <div className="banner">
+            <strong>Something did not go through.</strong> {err}
+            <button onClick={() => { setErr(null); refresh(); }}>retry</button>
+          </div>
+        )}
+        <div className="resetbar">
+          <span className="k">
+            This is one shared devnet vault. If a previous visitor left it in a strange state, put it back.
+          </span>
+          <button onClick={reset} disabled={!!busy}>{busy === "reset" ? "resetting…" : "↺ Reset demo"}</button>
+        </div>
       </header>
 
       <div className="grid">
@@ -141,6 +189,14 @@ export default function Page() {
               <p className="note">
                 The delegate is the multisig, not the agent. The SPL Token program refuses any transfer this service
                 has not co-signed, so the verifier cannot be skipped by the thing it verifies.
+              </p>
+              <button className="danger" onClick={revoke} disabled={!!busy || !s.delegateIsMultisig}>
+                {busy === "revoke" ? "revoking…" : "⏻ Revoke the delegate — kill switch"}
+              </button>
+              <p className="note">
+                One instruction, enforced by the token program, so it holds even if this service is fully
+                compromised. We revoke and then immediately attempt a fully co-signed transfer to prove the
+                authority is dead. The hosted demo re-grants on the next simulation so it stays clickable.
               </p>
             </section>
           )}
@@ -200,6 +256,20 @@ export default function Page() {
                     <div className="why">{f.detail}</div>
                   </div>
                 ))}
+                {res.repair && (
+                  <div className="entry pass" style={{ marginTop: 14 }}>
+                    <div className="head"><strong>The mandate can repair this</strong><span className="badge ok">counter-offer</span></div>
+                    <div className="why">
+                      The agent asked to receive {n2(res.repair.proposed)} {res.repair.symbol}. At the oracle
+                      reference of ${n2(res.repair.reference)}, {res.repair.constraint} permits no worse than{" "}
+                      <strong>{res.repair.minimum} {res.repair.symbol}</strong>. The policy service will co-sign
+                      that transaction and only that one.
+                    </div>
+                    <button className="primary" onClick={() => execute(false, true)} disabled={!!busy}>
+                      Co-sign the repaired trade instead
+                    </button>
+                  </div>
+                )}
                 <div style={{ marginTop: 14 }}>
                   <button className="primary" onClick={() => execute(false)} disabled={!!busy}>
                     {busy === "exec" ? "…" : res.blocked ? "Ask the policy service to co-sign" : "Co-sign and settle on devnet"}

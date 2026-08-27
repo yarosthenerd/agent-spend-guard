@@ -42,6 +42,28 @@ const CONTROLS = [
   { name: "Mandate", checks: "the simulated outcome, valued against an oracle", pricesFill: true },
 ];
 
+/**
+ * When the only thing wrong is the price, the mandate does not have to just refuse. It can
+ * state the worst fill it will accept and co-sign that transaction instead — structurally
+ * identical to binding `minOutAmount` before signing, and it maps to minOut on a real AMM.
+ */
+export function repairFor(m: ReturnType<typeof compile>, findings: any[], swap: Swap, px: any) {
+  const violated = findings.filter((f) => !f.ok);
+  if (violated.length !== 1 || !violated[0].constraint.startsWith("max slippage")) return null;
+  const c = m.constraints.find((x) => x.kind === "slippage") as { kind: "slippage"; maxPct: number } | undefined;
+  const p = px[swap.receiveSymbol];
+  if (!c || !p?.priceable) return null;
+  const min = +((swap.spend * (1 - c.maxPct / 100)) / p.price * 1.0001).toFixed(6);
+  if (min <= swap.receiveAmount) return null;
+  return {
+    constraint: `max slippage ${c.maxPct}%`,
+    symbol: swap.receiveSymbol,
+    proposed: swap.receiveAmount,
+    minimum: min,
+    reference: p.price,
+  };
+}
+
 export async function POST(req: Request) {
   try {
     const { mandate: src, scenario } = await req.json();
@@ -55,6 +77,7 @@ export async function POST(req: Request) {
     const px = await prices(["gUSD", "SOLX", "SCAM"]);
 
     return NextResponse.json({
+      repair: repairFor(m, findings, sc.swap, px),
       scenario, label: sc.label, note: sc.note, swap: sc.swap,
       mandateHash: createHash("sha256").update(src).digest("hex").slice(0, 16),
       mandateErrors: m.errors,

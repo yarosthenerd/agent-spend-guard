@@ -117,6 +117,18 @@ Each button is a distinct constraint, so "mandate" reads as a category rather th
 Rule 2 proves the thesis, because every input to it is real. In both blocked cases the amount constraint
 (`max trade 500 gUSD`) **passes**. Amount checking is not the contribution.
 
+## The mandate can counter-offer, not just refuse
+
+When the only thing wrong with a trade is the price, refusing it is a weak answer — the agent just tries
+again. So the policy service states the worst fill it will accept and co-signs **that** transaction instead:
+
+> The agent asked to receive 2.15 SOLX for 500 gUSD. At the oracle reference, `max slippage 2%` permits no
+> worse than 3.50 SOLX. The policy service co-signs that transaction and only that one.
+
+The agent never obtains a signature for its own version. This is **structurally identical to binding
+`minOutAmount` before signing, and it maps to minOut on a real AMM** — the difference being that here the
+policy service holds the venue key, where on an AMM it would write the bound into the swap instruction.
+
 ## Every verdict is recorded, allows included
 
 Each decision writes a structured record: mandate hash, scenario, simulated deltas, which rule fired, verdict,
@@ -130,17 +142,25 @@ identity is the next step.
 - **Constraint evaluation is still off-chain.** What is on-chain is the *requirement that the policy service
   sign at all*. A compromised policy key is the remaining trust assumption. Moving evaluation itself into an
   audited program is the next layer, and it is the actual product.
-- **Slippage bounds are checked at approval, not at execution.** Against a real AMM the fix is to rewrite
-  `minOutAmount` to whatever the mandate permits before co-signing, so the AMM enforces the bound at execution
-  time rather than our RPC call enforcing it at approval time. Our two-leg swap has no `minOut` field to bind,
-  so this is documented rather than demonstrated.
+- **Repair constrains the cooperative path, not every path.** The counter-offer works because the policy
+  service also holds the venue's key in this demo, so it can sign a rewritten receive leg and refuse the
+  agent's original. Against a real AMM the equivalent is binding `minOutAmount` into the swap instruction
+  before co-signing — same mechanism, and we do not hold the venue key in that world. "We constrain
+  execution" is the accurate claim. "The agent cannot transact without us" would be a stronger claim than
+  this build supports, and we do not make it.
+- **Slippage is bounded at approval, not at execution.** The repaired transaction is the one we co-sign, but
+  nothing re-checks the price at landing. On a real AMM `minOutAmount` closes that gap; our two-leg swap has
+  no such field.
 - **The mandate grammar is deterministic by design, not by constraint.** A mandate is a security artifact: it
   has to be reviewable, diffable, and hashable into an audit record. Natural language belongs *above* it as
   authoring sugar, never underneath it as the source of truth. That is the position we would hold with
   unlimited time, not a limitation we are working around.
-- **SOLX is priced from a live Pyth feed read on-chain** (devnet SOL/USD, account
-  `J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix`). gUSD is the unit of account, quoted at par by definition.
-  SCAM has no feed, which is the point of rule 3 rather than a gap.
+- **SOLX is our own devnet mint. There is no Pyth feed for it, and we do not pretend otherwise.** It is
+  priced off the live Pyth **SOL/USD** feed as a stand-in (account
+  `J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix`), read on-chain from devnet RPC. The oracle read, the price,
+  and the slippage arithmetic are all real; the mapping from SOLX to SOL is the demo's one substitution.
+  gUSD is the unit of account, quoted at par by definition. SCAM has no feed at all, which is the point of
+  rule 3 rather than a gap.
 - **What other products check is described from public documentation**, not live integrations.
 - **Keys are server-held** so judges can click through without a wallet. In production the owner key lives in
   the user's wallet and the policy key in the policy service; nothing in the design requires one host.
@@ -171,7 +191,10 @@ on-ramp to underwriting and insurance for agent-managed capital.
 4. `app/api/preflight` — compile, simulate, value against the oracle, evaluate, record.
 5. `app/api/execute` — the policy service co-signs **only** if the simulated outcome satisfies the mandate.
    `solo: true` demonstrates the agent attempting to sign without it, which the token program rejects.
-6. `app/api/allowance` / `app/api/revoke` — the owner approves the multisig as delegate, or revokes it.
+6. `app/api/allowance` / `app/api/revoke` — the owner approves the multisig as delegate, or revokes it. The
+   revoke path then immediately attempts a fully co-signed transfer and reports the on-chain failure, so the
+   kill switch is demonstrated rather than asserted.
+7. `app/api/reset` — puts the shared devnet vault back to a known state for the next visitor.
 
 ## Run it
 

@@ -40,12 +40,23 @@ The block comes from `allow mints` and `max slippage`, evaluated against the sim
 lets you sign it anyway and watch the value actually leave the vault on devnet, with an explorer link, so the
 block is demonstrably not theater.
 
+**Why this maps onto how agents actually lose money.** In May 2026 an attacker sent an NFT to a Grok-linked
+wallet; holding it granted "Executive" permissions and *bypassed* the transfer limits, and a Morse-encoded
+instruction was decoded and executed for ~$175,000 with no human in the loop. The limits were never exceeded.
+Every transaction was authorized. The failure was intent, not amount — and no spending cap can see that,
+because a cap checks how much. An outcome check can: the destination and the resulting position are decoded
+from the simulation and tested against the mandate regardless of what the agent believes it was told to do.
+That is the same class of failure as a 40% fill or an unpriceable position, which is why all three are one
+rule set rather than three products.
+
 **What we're honest about.** Enforcement here is pre-flight, not on-chain: it stops a misbehaving agent, not a
 compromised one. Moving these constraints into an audited program that custodies the capital is the next layer
 and the actual product — advisory first, on-chain once the constraint set proves itself. We deliberately do not
 compete on the allowance primitive; the Foundation shipped that audited and free, and we assume it underneath.
-Reference prices for demo mints are quoted constants (labelled in the UI); incumbent verdicts are modelled from
-public docs, not live integrations. All of this is stated in the README rather than implied away.
+SOLX is our own devnet mint priced off the live Pyth SOL/USD feed as a stand-in, stated plainly in the UI and
+README; what other products check is described from public docs, not live integrations. The repair path
+constrains the cooperative path, not every path, and we say so rather than claiming the agent cannot transact
+without us. All of this is stated in the README rather than implied away.
 
 ## Links
 - Live demo: https://agent-spend-guard-yaros3920-9222s-projects.vercel.app
