@@ -6,3 +6,5 @@ keys/
 *.log
 .vercel
 .env*
+feedback.txt
+tsconfig.tsbuildinfo
