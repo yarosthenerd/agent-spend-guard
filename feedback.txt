@@ -1,0 +1,117 @@
+Short version: the problem you're solving is real and getting more attention every month, but the specific mechanism in your demo got commoditized about three months ago. That doesn't kill the idea, it just means the defensible product isn't where the demo puts it.
+
+The demand side looks genuinely strong
+
+Agent wallet security stopped being theoretical this year. AI agent protocol vulnerabilities produced more than $45 million in losses through the first half of 2026. In May, an attacker sent a "Bankr Club Membership" NFT to a Grok-linked wallet, which granted it "Executive" permissions and bypassed transfer limits; a Morse-encoded instruction was then decoded and executed, and roughly $175,000 left the wallet in seconds with no human in the loop. Blockaid's H1 report named the proliferation of AI agent exploits as one of three main threat categories for the rest of 2026. 
+Tech Times + 2
+
+Volume is there too. x402 had processed 35 million transactions on Solana alone by March 2026, and Coinbase launched Agentic Wallets on February 11, 2026 with built-in guardrails for spending limits and permissions. Solana is clearly where agentic payment flow is concentrating. 
+Metaverse Post
+
+So: correct problem, correct chain, correct year.
+
+The competitive problem
+
+On June 2, 2026 the Solana Foundation shipped Subscriptions & Allowances, an audited (Cantina/Spearbit), open-source program live on mainnet. Its "Allowances (Fixed Delegation)" model is described in the announcement as the building block for AI agents that need to act autonomously within a budget, with the user setting a cap and an expiration. It solves the single-delegate constraint via multi-delegate support, works with SPL Token and Token-2022 including confidential transfers, and is integration-tested with Squads and Swig. 
+Solana
+
+That is your core mechanic, free, audited, blessed, and with Helius, Dynamic/Fireblocks, and Confirmo already integrating.
+
+Above it sit the policy players you'd also be competing with: Squads v5 hooks that set spending limits, dynamic approval thresholds by transaction type, and program whitelists; Swig, whose policy engine runs on-chain inside the smart contract with no TEE dependency; Solana Agent Kit V2, which already moved to Turnkey and Privy embedded wallets so the agent gets a scoped key with transaction-type limits and spending caps; and Ledger's Agent Stack, launched July 16, 2026, which puts the final approval on a hardware device. 
+Squads + 3
+
+Technical caveats specific to your design
+
+Your footer is admirably honest, and it also states the weakness out loud. The SPL delegate enforces one thing: a cumulative ceiling on outflow from one token account. Everything interesting is off-chain in your service.
+
+Per-trade and daily caps are not enforced by anything. A compromised agent key drains the full remaining allowance in a single instruction. Your demo tests a 5,000 drain against a 500 allowance, which the chain blocks. A real attacker takes 500. That's the test that matters and the current design fails it.
+No destination constraint. The delegate can send to any address. Your allowlist is a suggestion.
+Swap output isn't covered. A delegate can move input tokens, but nothing forces the proceeds of a Jupiter swap back into the vault. Perps, lending positions, and staking are entirely outside the model.
+Native SOL isn't covered at all.
+The kill switch is a race. Revoke requires the owner to land a transaction. A malicious agent with the delegate front-runs it, and on mainnet that's a priority-fee auction, not a devnet formality.
+Refill treadmill. As the allowance decrements the owner has to re-approve, which puts a human back in the loop and undercuts the autonomy pitch. Recurring delegation is the fix, and the Foundation program already ships it.
+Delegate overwrite. A token account stores one delegate and one delegated amount, and approving a new delegate replaces the previous one. Any other integration touching the same account silently kills yours unless you route through a PDA. 
+Solana
+
+Mainnet adds the usual: transaction landing under congestion, MEV on your agent's trades, Token-2022 extension edge cases, frozen accounts, and RPC cost.
+
+Business caveats
+Monetization is the hard part. You'd be wrapping a free audited program in a service, on a chain where fees are a fraction of a cent. Per-transaction take rates don't work. That pushes you toward SaaS pricing for dashboards, monitoring, and compliance reporting, which is a different company than the one the demo implies.
+Your buyer is a developer, and developers default to whatever their framework already bundles. Distribution means getting into Solana Agent Kit, MCP servers, and x402 tooling, not landing pages.
+Audits are table stakes in this category and cost real money. Shipping "security infrastructure" unaudited is worse than not shipping.
+Asymmetric reputational risk. One drained customer ends the company, even if the fault was theirs.
+Regulatory exposure. The moment you co-sign or hold policy keys you're arguably in custody territory, with MiCA/VASP implications for EU customers. Non-custodial architecture is a legal design choice, not just a technical one.
+Narrative risk. Agent trading has already been through one hype cycle. Budget for the second one deflating too.
+How I'd re-scope before spending money
+
+Stop competing on the primitive. Build on the Foundation program and compete one layer up, where the gap actually is:
+
+Real on-chain policy. Per-trade caps, destination allowlists, program allowlists, oracle-based price sanity checks, cooldowns. Either your own audited program, or Squads v5 hooks / Swig roles. This is the difference between "the chain enforces it" and "we enforce it."
+The failure modes that are actually killing people. The 2026 incidents weren't broken ceilings, they were prompt injection, permission-chain abuse, and compromised tool/router layers. Detection, anomaly scoring, and a fast independent kill path are the unsolved part.
+Or go vertical. Prop desks and small funds running agent strategies need audit trails and per-strategy limits for reasons that have nothing to do with crypto-native ideology, and they'll pay a subscription.
+
+Cheapest validation: before writing more code, put the current demo in front of ten teams actually running agents on Solana mainnet and ask what they use today and what it costs them. If the answer is "Turnkey policies plus a Squads vault and it's fine," you have your answer for a few weeks of effort instead of a year.
+
+
+
+
+
+
+First, the filter
+
+Something is exclusive here only if it fails at least one of these tests for every incumbent:
+
+Can Squads, Swig, or the Foundation ship it as a feature? If yes, you're a feature.
+Is it denominated in transfer amounts? If yes, it's already free.
+Does it get cheaper to copy once someone sees your landing page? If yes, it's a demo.
+
+Almost every "agent spending controls" product fails all three. The allowance primitive is now Foundation infrastructure, agent identity and reputation are too — (cite index="47-1">the Agent Registry launched with an Identity Registry backed by PDAs and a Validation Registry with hooks for TEE oracles, staker re-runs, and third-party auditors, all recorded on-chain</cite> — and key-level policy belongs to Turnkey, Fireblocks, and Ledger.
+
+What survives the filter
+
+Two observations that point the same direction.
+
+The 2026 losses weren't ceiling breaches. In the Bankr/Grok case the transfer limits were bypassed by permission escalation, not exceeded. The attack worked because holding an NFT granted Executive permissions and there were no secondary confirmation mechanisms between an instruction and its execution. Every transaction was authorized. It just wasn't what the owner meant. Nobody's spending cap solves that, because a cap checks amount and the failure was intent. 
+The Insumer Model
+
+All existing controls are payment controls, not trading controls. An agent can lose 100% of a vault without ever exceeding a single limit: swap into a worthless mint, eat 40% slippage, get sandwiched, LP into a rug, over-concentrate. The Foundation program is explicitly built for recurring billing, payroll, subscription plans, and content micropayments. It will never grow venue allowlists, oracle-referenced slippage bounds, position concentration limits, or drawdown circuit breakers, because those aren't payments features. 
+Solana
+
+That gap — enforcement over outcomes rather than transfer amounts — is the only part of your original thesis that hasn't been absorbed.
+
+The re-scope I'd actually pick
+
+An enforced-mandate execution layer for agents managing other people's money.
+
+Concretely: an audited Solana program where a depositor's capital sits, and the agent is authorized to act only through instructions the program validates against a mandate:
+
+allowed programs and venues (Jupiter, Drift, Kamino, nothing else)
+max slippage versus a Pyth/Switchboard reference at execution time
+per-position and per-mint concentration caps
+an automatic drawdown halt that freezes new positions and only allows unwinds
+withdrawal always available to the depositor, never to the agent
+every action emitted as a structured event tied to the agent's Registry identity
+
+The agent still signs its own transactions and never holds custody. The difference from your current demo is that the constraints live in the program, so your service being fully compromised changes nothing.
+
+Why the OPM framing matters more than the technology. Security tooling for someone's own agent is a cost center, and cost centers get bought at $49/month or not at all. Risk enforcement for third-party capital is a revenue enabler: it's the thing that lets an agent operator raise money at all. You charge basis points or a slice of performance fees, which is a real business at a scale that SaaS on this problem never reaches.
+
+Why this is defensible
+Squads won't build it. They're treasury and payments infrastructure at institutional scale. Trading mandates are a different risk surface and a different customer.
+Swig won't build it. Wallet-level policy is about who may act, not whether a trade is economically sane. Their model is roles and permissions, not oracles and drawdown.
+The Foundation won't build it. Wrong product line entirely.
+It compounds. Every mandate you enforce produces a verifiable, third-party-checkable track record. The Validation Registry exists precisely to record independent validator checks tied to agent identities. Being the entity whose attestations allocators trust is a position that gets harder to displace each quarter, and it's the natural on-ramp to underwriting and insurance later. 
+Solana
+The data is a moat. A corpus of real constrained agent execution — what agents actually try to do, what gets blocked, what precedes a blowup — is not something a competitor can clone from your docs.
+The honest reasons it could fail
+You're now partly in fund administration. Pooling third-party capital with a fee touches securities and collective-investment rules in most jurisdictions, and MiCA in the EU. This needs a lawyer before it needs a line of code, and structuring it as pure non-custodial infrastructure rather than a managed product is the difference between viable and not. I'm not a lawyer and this is the part I'd least want you to take on my word.
+Audit cost is unavoidable and higher than for a delegate wrapper, because the program holds capital.
+Adjacent players exist. Curated vaults are already a large category on Solana, and someone like Kamino or Drift can add an agent-operator tier. Your defense is being the neutral enforcement and attestation layer that works across venues rather than a competing vault brand.
+Agent strategies may simply not perform. If agent trading doesn't produce returns, there's no capital to allocate and the whole thesis has no substrate. Test this assumption early.
+The cheaper wedge to get there
+
+If the full build is too heavy right now, start with the piece that generates the data and the relationships:
+
+A mandate compiler and pre-flight verifier. The owner writes what the agent is allowed to do in plain language. You compile it into machine-checkable constraints, simulate every agent transaction against them before it lands, and block or flag mismatches. Ship it as an MCP server and a Solana Agent Kit plugin so it sits inside the workflow developers already use. Enforcement starts advisory, moves on-chain as you learn what constraints actually matter.
+
+This is closer to your existing work, it's cheap, it produces the corpus, and the natural language layer is the one place an incumbent wallet company is genuinely weak. It's a wedge, not a business, so treat revenue from it as validation signal rather than the plan.

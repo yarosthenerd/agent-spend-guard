@@ -1,84 +1,114 @@
-# Agent Spend-Guard
+# Mandate
 
-**Give your trading agent an allowance, not your wallet.**
+**Spending caps check the amount. Mandates check the outcome.**
 
 **Live demo:** https://agent-spend-guard-yaros3920-9222s-projects.vercel.app
 
-Solana **devnet** · every button sends a real transaction · no wallet install needed.
+Solana **devnet** · every verdict comes from a real `simulateTransaction` against live RPC · no wallet needed.
 
 ---
 
-## The problem
+## The gap
 
-Autonomous trading agents are shipping fast, and almost all of them are handed a raw private key.
-The agent has full custody. If the model hallucinates, the prompt gets injected, or the signer
-service is breached, the entire wallet is gone. The only "limit" is whatever the agent's own
-codebase promises to respect — an off-chain promise, enforced by nobody.
+Every agent spending control shipping today is denominated in **transfer amounts**:
 
-## The idea
+- **Solana Foundation — Subscriptions & Allowances** (audited, mainnet, June 2 2026): a cumulative cap plus expiry.
+- **Squads v5 spending limits**: per-period amount caps.
+- **Swig policy roles**: which programs an agent may call.
+- Every "agent wallet with guardrails" launched this year, including our own first version.
 
-Solana already has the primitive for this and nearly nobody uses it for agents.
+An agent can lose 100% of a vault **without exceeding any of them**. Swap into a worthless mint. Eat 40%
+slippage. Get sandwiched. Over-concentrate into one position. LP into a rug. Every one of those transactions
+is fully authorized and within budget. The cap asks *how much*. It never asks *in exchange for what*.
 
-SPL Token's `approve` installs a **delegate with a hard-capped amount**, enforced by the token
-program itself. `revoke` removes it in one instruction. So an agent can be given spending power
-over a vault it does not own, bounded by a ceiling it cannot argue with.
+This is not hypothetical. The 2026 agent losses were not ceiling breaches. In the Bankr/Grok incident the
+transfer limits were **bypassed by permission escalation, not exceeded** — every transaction was authorized,
+it just wasn't what the owner meant. AI agent protocol exploits produced $45M+ in losses through H1 2026.
+No spending cap addresses that class, because a cap checks amount and the failure was intent.
 
-Spend-Guard wraps that into an agent wallet with two independent layers:
+## What Mandate does
 
-| Layer | Enforces | Enforced by | Survives a compromised backend |
-|---|---|---|---|
-| **Policy** | per-trade cap, rolling daily cap, destination allowlist | this service | no |
-| **Chain** | total allowance ceiling, instant revoke | SPL Token program | **yes** |
-
-The policy layer is convenience. The chain layer is the guarantee. The demo proves the difference
-by switching the policy layer off and watching Solana refuse the transaction anyway.
-
-## What the demo does
-
-1. **Grant allowance** — owner signs an on-chain `approveChecked`. Agent may now spend up to N gUSD.
-2. **Normal trade** — agent signs its own `transferChecked` as delegate. Settles on devnet.
-3. **Oversized trade** — blocked by the policy layer before it ever reaches the chain.
-4. **Unlisted destination** — blocked by the allowlist.
-5. **Drain attempt** — *policy layer deliberately bypassed*, simulating a fully compromised signer.
-   SPL Token rejects it: `custom program error: 0x1`, allowance exhausted.
-6. **Kill switch** — owner signs `revoke`. The agent's next trade fails on-chain with `0x4`.
-
-Every result links to Solana Explorer. Nothing is mocked.
-
-## Audit trail
-
-Each spend carries a Memo instruction in the same atomic transaction:
+The owner declares what the agent may **do**. Mandate compiles it to machine-checkable constraints,
+**simulates the agent's transaction against devnet before anything is signed**, decodes the true post-state
+balance deltas, and evaluates the constraints against the outcome the simulation actually produces.
 
 ```
-spend-guard:trade:<amount>:policy=<sha256(policy)[0:16]>
+allow programs: spl-token, memo
+allow mints: gUSD, SOLX
+max slippage 2%
+max trade 500 gUSD
+max position 25% of vault
+halt on drawdown 10%
 ```
 
-The policy in force at the moment of the spend is committed on-chain alongside the transfer,
-so it cannot be retroactively disowned.
+## The demo, and the test that matters
 
-## Design notes, honestly
+Our previous version tested a 5,000 drain against a 500 allowance. The chain blocked it. That was the wrong
+test — **a real attacker takes exactly 500.** So that is what the demo does now:
 
-- **No custom program.** Enforcement rides on SPL Token, which is already audited and battle-tested.
-  That is the point: the guarantee exists today and is not being used.
-- **Keys are server-held** so a judge can click through without installing a wallet. In production
-  the owner key lives in the user's wallet and the agent key in the agent's runtime; nothing about
-  the design requires them to share a host.
-- **Policy state is client-held** in this build to keep the demo stateless on serverless. Its hash is
-  committed on-chain per spend. In production the policy lives in the signer service.
-- **Per-trade caps are off-chain.** Making those on-chain needs a program. The ceiling and the kill
-  switch do not, which is why they work here.
+> The agent proposes swapping its **entire 500 gUSD allowance** into a worthless mint at a 40% loss.
+> It exceeds no limit. It spends precisely what it was authorized to spend.
+
+| Control | Checks | Verdict |
+|---|---|---|
+| Foundation Allowances (fixed delegation) | cumulative cap + expiry | **allow** |
+| Squads v5 spending limits | per-period amount cap | **allow** |
+| Swig policy roles | which programs may be called | **allow** |
+| Spend-Guard v1 (SPL delegate ceiling) | cumulative cap | **allow** |
+| **Mandate** | **simulated outcome** | **block** |
+
+Mandate's own amount constraint (`max trade 500 gUSD`) **passes** — that is deliberate. The block comes from
+`allow mints` and `max slippage`, evaluated against the simulated result. Amount checking is not the contribution.
+
+There is an **override** button. Press it and the transaction really settles on devnet and the value really
+leaves the vault, with an explorer link. The block is not theater.
+
+## Honest limits
+
+- **Enforcement is pre-flight, not on-chain.** Mandate stops a *misbehaving* agent, not a *compromised* one:
+  an attacker holding the agent key can bypass this service and sign directly, bounded only by the delegate
+  ceiling underneath. Moving these constraints into an audited program that custodies the capital is the next
+  layer, and it is the actual product. Advisory first, on-chain as the constraint set proves itself.
+- **We do not compete on the allowance primitive.** The Foundation's program is free, audited, multi-delegate
+  and Token-2022 compatible. We assume it underneath rather than reimplement it.
+- **The mandate grammar is deterministic, not a language model.** A natural-language front-end is the obvious
+  next layer; faking it with no model behind it would be a demo, not a check.
+- **Reference prices for the demo mints are quoted constants**, labelled as such in the UI. The same field is
+  populated from Pyth Hermes for real mints.
+- **Incumbent verdicts are modelled from public documentation**, not live integrations.
+- Keys are server-held so judges can click through without a wallet. Nothing in the design requires it.
+
+## Why this is defensible
+
+Squads is treasury and payments infrastructure. Swig is roles and permissions — *who* may act, not whether
+the action is economically sane. The Foundation's program is explicitly built for recurring billing, payroll
+and subscriptions; it will never grow venue allowlists, oracle-referenced slippage bounds or drawdown circuit
+breakers, because those are not payments features.
+
+Enforcement over **outcomes** rather than transfer amounts is the part of this problem nobody above us has
+absorbed. It also compounds: every mandate enforced produces a verifiable record of what an agent tried to do
+and what got blocked, which is exactly the corpus the Agent Registry's Validation Registry exists to anchor.
+
+## How it works
+
+1. `lib/mandate.ts` — grammar, compiler, and evaluator over an `Outcome`.
+2. `lib/preflight.ts` — builds the trade as an atomic two-leg swap, runs `simulateTransaction` with account
+   inspection, decodes `AccountLayout` post-state, and derives value deltas, slippage, concentration, drawdown.
+3. `app/api/preflight` — compile, simulate, evaluate, and compute the incumbent comparison.
+4. `app/api/execute` — signs **only** if the simulated outcome satisfies the mandate, unless explicitly overridden.
 
 ## Run it
 
 ```bash
 npm install --ignore-scripts
-node scripts/setup.mjs   # creates the gUSD mint, vault, funds the agent for fees
+node scripts/setup.mjs    # gUSD mint, vault, delegate funding
+node scripts/setup2.mjs   # SOLX and SCAM mints, venue inventory
 npm run dev
 ```
 
-`scripts/setup.mjs` expects `keys/devnet-keys.json` with base58 secrets for OWNER / AGENT / VENUE,
-and the owner funded with devnet SOL. It writes `.env.local`.
+Requires `keys/devnet-keys.json` with base58 secrets for OWNER / AGENT / VENUE and the owner funded with
+devnet SOL. Both scripts write to `.env.local`.
 
 ## Stack
 
-Next.js 15 · TypeScript · `@solana/web3.js` · `@solana/spl-token` · Solana devnet · Vercel
+Next.js · TypeScript · `@solana/web3.js` · `@solana/spl-token` · Solana devnet · Vercel

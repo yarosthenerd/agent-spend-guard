@@ -19,6 +19,7 @@ function kp(envName: string): Keypair {
 export const owner = () => kp("OWNER_SECRET");
 export const agent = () => kp("AGENT_SECRET");
 export const venue = () => new PublicKey(process.env.VENUE_PUBKEY!);
+export const venueKp = () => kp("VENUE_SECRET");
 export const mint = () => new PublicKey(process.env.MINT!);
 
 export const toBase = (ui: number) => BigInt(Math.round(ui * 10 ** DECIMALS));

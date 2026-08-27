@@ -2,27 +2,35 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-type State = {
-  mint: string; symbol: string; ownerPubkey: string; agentPubkey: string; venuePubkey: string;
-  vaultAta: string; vaultBalance: number; venueBalance: number;
-  delegate: string | null; allowanceRemaining: number; agentIsDelegate: boolean;
+const DEFAULT_MANDATE = `allow programs: spl-token, memo
+allow mints: gUSD, SOLX
+max slippage 2%
+max trade 500 gUSD
+max position 25% of vault
+halt on drawdown 10%`;
+
+type Finding = { constraint: string; ok: boolean; detail: string };
+type Leg = { symbol: string; delta: number; value: number; price: number };
+type Result = {
+  label: string; note: string; blocked: boolean;
+  swap: { spend: number; receiveSymbol: string; receiveAmount: number };
+  outcome: { legs: Leg[]; valueOut: number; valueIn: number; slippagePct: number; drawdownPct: number; programIds: string[] };
+  findings: Finding[];
+  incumbents: { name: string; checks: string; ok: boolean }[];
+  state: State;
 };
-type Entry = {
-  id: number; label: string; amount: number;
-  verdict: "pass" | "policy" | "chainblock"; why: string; sig?: string; explorer?: string;
-};
+type State = { vaultBalance: number; allowanceRemaining: number; agentIsDelegate: boolean; vaultAta: string; agentPubkey: string; mint: string };
 
 const ex = (a: string) => `https://explorer.solana.com/address/${a}?cluster=devnet`;
-const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
+const n2 = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
 export default function Page() {
+  const [mandate, setMandate] = useState(DEFAULT_MANDATE);
   const [s, setS] = useState<State | null>(null);
+  const [res, setRes] = useState<Result | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [log, setLog] = useState<Entry[]>([]);
-  const [grant, setGrant] = useState(500);
-  const [perTxCap, setPerTxCap] = useState(100);
-  const [dailyCap, setDailyCap] = useState(300);
-  const [spentToday, setSpentToday] = useState(0);
+  const [exec, setExec] = useState<{ ok: boolean; msg: string; explorer?: string } | null>(null);
+  const [scenario, setScenario] = useState<"good" | "drain" | null>(null);
 
   const refresh = useCallback(async () => {
     const r = await fetch("/api/state", { cache: "no-store" });
@@ -30,210 +38,157 @@ export default function Page() {
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
 
-  const push = (e: Omit<Entry, "id">) => setLog((l) => [{ ...e, id: Date.now() + Math.random() }, ...l]);
-
-  async function grantAllowance() {
-    setBusy("grant");
-    const r = await fetch("/api/allowance", {
+  async function preflight(sc: "good" | "drain") {
+    setBusy(sc); setExec(null); setScenario(sc);
+    const r = await fetch("/api/preflight", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ amount: grant }),
+      body: JSON.stringify({ mandate, scenario: sc }),
     }).then((x) => x.json());
     if (r.state) setS(r.state);
-    setSpentToday(0);
-    push({
-      label: "Owner granted allowance", amount: grant,
-      verdict: r.ok ? "pass" : "chainblock",
-      why: r.ok ? `Agent may now spend up to ${grant} gUSD. Enforced by SPL Token.` : r.error ?? "failed",
-      sig: r.sig, explorer: r.explorer,
-    });
+    setRes(r.error ? null : r);
     setBusy(null);
   }
 
-  async function trade(amount: number, label: string, destination?: string, bypassPolicy = false) {
-    if (!s) return;
-    setBusy(label);
-    const dest = destination ?? s.venuePubkey;
-    const r = await fetch("/api/trade", {
+  async function execute(override: boolean) {
+    if (!scenario) return;
+    setBusy("exec");
+    const r = await fetch("/api/execute", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        amount, destination: dest,
-        policy: bypassPolicy
-          ? { perTxCap: 1e9, dailyCap: 1e9, allowlist: [dest] }
-          : { perTxCap, dailyCap, allowlist: [s.venuePubkey] },
-        spentToday,
-      }),
+      body: JSON.stringify({ mandate, scenario, override }),
     }).then((x) => x.json());
-
     if (r.state) setS(r.state);
-    if (r.ok) setSpentToday((v) => v + amount);
-    push({
-      label, amount,
-      verdict: r.ok ? "pass" : r.layer === "policy" ? "policy" : "chainblock",
-      why: r.ok ? `Settled on devnet. Policy ${r.policyHash} committed on-chain.` : r.reason ?? r.error ?? "failed",
-      sig: r.sig, explorer: r.explorer,
-    });
+    setExec(r.ok
+      ? { ok: true, msg: r.overridden ? "Signed over the mandate's objection. The value is gone — this is what the block prevents." : "Mandate satisfied. Settled on devnet.", explorer: r.explorer }
+      : { ok: false, msg: r.reason ?? r.error ?? "failed" });
     setBusy(null);
   }
 
-  async function revoke() {
-    setBusy("revoke");
-    const r = await fetch("/api/revoke", { method: "POST" }).then((x) => x.json());
-    if (r.state) setS(r.state);
-    push({
-      label: "Owner pulled the kill switch", amount: 0,
-      verdict: r.ok ? "pass" : "chainblock",
-      why: r.ok ? "Delegate revoked on-chain. The agent has no authority left." : r.error ?? "failed",
-      sig: r.sig, explorer: r.explorer,
-    });
-    setBusy(null);
-  }
-
-  const granted = s?.agentIsDelegate ? s.allowanceRemaining : 0;
-  const pct = grant > 0 ? Math.min(100, (granted / grant) * 100) : 0;
+  const o = res?.outcome;
 
   return (
     <div className="wrap">
       <header className="hero">
-        <span className="tag">Solana devnet · live</span>
-        <h1>Agent Spend-Guard</h1>
-        <p className="pitch">Give your trading agent an allowance, not your wallet.</p>
+        <span className="tag">Solana devnet · simulated against live RPC</span>
+        <h1>Mandate</h1>
+        <p className="pitch">Spending caps check the amount. Mandates check the outcome.</p>
         <p className="sub">
-          Autonomous trading agents today are handed a private key and trusted to behave. This hands them an
-          SPL Token <strong>delegate allowance</strong> instead: a hard ceiling the token program itself enforces,
-          plus a one-instruction kill switch. The agent signs its own trades and never holds custody.
-          Every button below sends a real transaction to Solana devnet.
+          Every agent control shipping today is denominated in transfer amounts — the Foundation&apos;s Allowances
+          program, Squads spending limits, Swig roles. An agent can lose a whole vault without exceeding any of
+          them: swap into a worthless mint, eat 40% slippage, over-concentrate. Mandate compiles what the agent is
+          allowed to <em>do</em>, simulates every transaction against devnet before it is signed, and blocks on the
+          outcome the simulation actually produces.
         </p>
       </header>
 
       <div className="grid">
         <div>
           <section className="panel">
-            <h2>Vault</h2>
-            {!s ? <p className="empty">connecting to devnet…</p> : (
-              <>
-                <div className="stat">
-                  <span className="k">Allowance remaining</span>
-                  <span className={`v big ${granted > 0 ? "accent" : "bad"}`}>{granted.toLocaleString()}</span>
-                </div>
-                <div className="meter"><i style={{ width: `${pct}%` }} /></div>
-                <div className="stat">
-                  <span className="k">Vault balance</span>
-                  <span className="v">{s.vaultBalance.toLocaleString()} {s.symbol}</span>
-                </div>
-                <div className="stat">
-                  <span className="k">Agent has spent (today)</span>
-                  <span className="v">{spentToday.toLocaleString()} {s.symbol}</span>
-                </div>
-                <div className="stat">
-                  <span className="k">Venue received</span>
-                  <span className="v">{s.venueBalance.toLocaleString()} {s.symbol}</span>
-                </div>
-                <div className="stat">
-                  <span className="k">On-chain delegate</span>
-                  <span className={`v ${s.agentIsDelegate ? "ok" : "bad"}`}>
-                    {s.delegate ? <a href={ex(s.delegate)} target="_blank" rel="noreferrer">{short(s.delegate)}</a> : "none · revoked"}
-                  </span>
-                </div>
-                <div className="stat">
-                  <span className="k">Vault account</span>
-                  <span className="v"><a href={ex(s.vaultAta)} target="_blank" rel="noreferrer">{short(s.vaultAta)}</a></span>
-                </div>
-              </>
-            )}
+            <h2>The mandate</h2>
+            <textarea value={mandate} onChange={(e) => setMandate(e.target.value)} spellCheck={false} rows={7} />
+            <p className="note">
+              A constrained grammar, not a language model. Edit it and re-run — loosen the slippage bound to 50%
+              or add SCAM to the allowed mints and the block disappears.
+            </p>
           </section>
 
           <section className="panel" style={{ marginTop: 20 }}>
-            <h2>Owner controls</h2>
-            <label>Allowance to grant (gUSD)</label>
-            <input type="number" value={grant} onChange={(e) => setGrant(+e.target.value)} />
-            <div className="row">
-              <div>
-                <label>Per-trade cap</label>
-                <input type="number" value={perTxCap} onChange={(e) => setPerTxCap(+e.target.value)} />
-              </div>
-              <div>
-                <label>Daily cap</label>
-                <input type="number" value={dailyCap} onChange={(e) => setDailyCap(+e.target.value)} />
-              </div>
+            <h2>Agent proposes</h2>
+            <div className="scenarios">
+              <button onClick={() => preflight("good")} disabled={!!busy}>
+                {busy === "good" ? "simulating…" : "✓ Rebalance 50 gUSD into SOLX"}
+              </button>
+              <button onClick={() => preflight("drain")} disabled={!!busy}>
+                {busy === "drain" ? "simulating…" : "☠ Swap the full 500 allowance into SCAM"}
+              </button>
             </div>
-            <button className="primary" onClick={grantAllowance} disabled={!!busy || !s}>
-              {busy === "grant" ? "signing…" : "Grant allowance on-chain"}
-            </button>
-            <button className="danger" onClick={revoke} disabled={!!busy || !s?.agentIsDelegate}>
-              {busy === "revoke" ? "revoking…" : "⏻ Revoke — kill switch"}
-            </button>
             <p className="note">
-              Caps are enforced by this service. The allowance ceiling and the revoke are enforced by the
-              SPL Token program, and hold even if this service is fully compromised.
+              The second one spends <strong>exactly</strong> its allowance. It exceeds no limit anywhere.
+              That is the attack every amount-based control is blind to.
             </p>
           </section>
+
+          {s && (
+            <section className="panel" style={{ marginTop: 20 }}>
+              <h2>Vault</h2>
+              <div className="stat"><span className="k">Balance</span><span className="v">{n2(s.vaultBalance)} gUSD</span></div>
+              <div className="stat"><span className="k">Agent allowance left</span><span className="v accent">{n2(s.allowanceRemaining)} gUSD</span></div>
+              <div className="stat"><span className="k">Vault account</span><span className="v"><a href={ex(s.vaultAta)} target="_blank" rel="noreferrer">explorer ↗</a></span></div>
+            </section>
+          )}
         </div>
 
         <div>
-          <section className="panel">
-            <h2>Agent actions</h2>
-            <div className="scenarios">
-              <button onClick={() => trade(50, "Agent buys — within limits")} disabled={!!busy || !s}>
-                ✓ Normal trade · 50 gUSD
-              </button>
-              <button onClick={() => trade(250, "Agent buys — oversized")} disabled={!!busy || !s}>
-                ⚠ Oversized trade · 250 gUSD <span className="accent">→ policy should block</span>
-              </button>
-              <button
-                onClick={() => s && trade(50, "Agent pays an unknown address", "11111111111111111111111111111111")}
-                disabled={!!busy || !s}
-              >
-                ⚠ Pay unlisted address · 50 gUSD <span className="accent">→ allowlist should block</span>
-              </button>
-              <button
-                onClick={() => trade(Math.max(grant + 1000, 5000), "Agent tries to drain the vault", undefined, true)}
-                disabled={!!busy || !s}
-              >
-                ☠ Drain attempt · {Math.max(grant + 1000, 5000).toLocaleString()} gUSD{" "}
-                <span className="bad">→ policy layer bypassed, chain must hold</span>
-              </button>
-            </div>
-            <p className="note">
-              The drain attempt is the one that matters: it ships with the policy layer deliberately switched off,
-              simulating a fully compromised signer service. Solana still refuses to settle it.
-            </p>
-          </section>
+          {!res && <section className="panel"><h2>Verdict</h2><p className="empty">run a scenario to simulate it against devnet.</p></section>}
 
-          <section className="panel" style={{ marginTop: 20 }}>
-            <h2>Activity</h2>
-            <div className="log">
-              {log.length === 0 && <p className="empty">no activity yet — grant an allowance, then run the agent.</p>}
-              {log.map((e) => (
-                <div key={e.id} className={`entry ${e.verdict}`}>
-                  <div className="head">
-                    <strong>{e.label}</strong>
-                    <span className={`badge ${e.verdict === "pass" ? "ok" : e.verdict === "policy" ? "accent" : "bad"}`}>
-                      {e.verdict === "pass" ? "settled" : e.verdict === "policy" ? "blocked · policy" : "blocked · chain"}
+          {res && o && (
+            <>
+              <section className="panel">
+                <h2>What the simulation says will happen</h2>
+                <div className="stat"><span className="k">Proposed</span><span className="v">{res.label}</span></div>
+                {o.legs.filter((l) => Math.abs(l.delta) > 1e-9).map((l) => (
+                  <div className="stat" key={l.symbol}>
+                    <span className="k">{l.delta < 0 ? "Vault pays" : "Vault receives"}</span>
+                    <span className={`v ${l.delta < 0 ? "" : "chain"}`}>
+                      {n2(Math.abs(l.delta))} {l.symbol} <span className="k">≈ {n2(l.value)} gUSD @ {l.price}</span>
                     </span>
                   </div>
-                  <div className="why">{e.why}</div>
-                  {e.explorer && (
-                    <div className="why">
-                      <a href={e.explorer} target="_blank" rel="noreferrer">view transaction on Solana Explorer ↗</a>
+                ))}
+                <div className="stat">
+                  <span className="k">Value in vs out</span>
+                  <span className={`v ${o.slippagePct > 2 ? "bad" : "ok"}`}>{n2(o.valueOut)} → {n2(o.valueIn)} ({o.slippagePct.toFixed(1)}% loss)</span>
+                </div>
+              </section>
+
+              <section className="panel" style={{ marginTop: 20 }}>
+                <h2>What today&apos;s controls say</h2>
+                {res.incumbents.map((i) => (
+                  <div className="stat" key={i.name}>
+                    <span className="k">{i.name}<br /><span style={{ opacity: .65 }}>checks {i.checks}</span></span>
+                    <span className={`v badge ${i.ok ? "ok" : "bad"}`}>{i.ok ? "allow" : "block"}</span>
+                  </div>
+                ))}
+                <p className="note">Modelled from public documentation, not live integrations. All of them ask how much.</p>
+              </section>
+
+              <section className="panel" style={{ marginTop: 20 }}>
+                <h2>What the mandate says</h2>
+                {res.findings.map((f) => (
+                  <div className={`entry ${f.ok ? "pass" : "chainblock"}`} key={f.constraint}>
+                    <div className="head">
+                      <strong>{f.constraint}</strong>
+                      <span className={`badge ${f.ok ? "ok" : "bad"}`}>{f.ok ? "ok" : "violated"}</span>
                     </div>
+                    <div className="why">{f.detail}</div>
+                  </div>
+                ))}
+                <div style={{ marginTop: 14 }}>
+                  <button className="primary" onClick={() => execute(false)} disabled={!!busy}>
+                    {busy === "exec" ? "…" : res.blocked ? "Sign it (mandate will refuse)" : "Sign and settle on devnet"}
+                  </button>
+                  {res.blocked && (
+                    <button className="danger" onClick={() => execute(true)} disabled={!!busy}>
+                      Override the mandate and sign anyway
+                    </button>
                   )}
                 </div>
-              ))}
-            </div>
-          </section>
+                {exec && (
+                  <div className={`entry ${exec.ok ? "pass" : "chainblock"}`} style={{ marginTop: 12 }}>
+                    <div className="why">{exec.msg}</div>
+                    {exec.explorer && <div className="why"><a href={exec.explorer} target="_blank" rel="noreferrer">view transaction ↗</a></div>}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
         </div>
       </div>
 
       <footer>
-        {s && (
-          <>
-            gUSD mint <a href={ex(s.mint)} target="_blank" rel="noreferrer">{short(s.mint)}</a> ·
-            {" "}owner <a href={ex(s.ownerPubkey)} target="_blank" rel="noreferrer">{short(s.ownerPubkey)}</a> ·
-            {" "}agent <a href={ex(s.agentPubkey)} target="_blank" rel="noreferrer">{short(s.agentPubkey)}</a> ·
-            {" "}venue <a href={ex(s.venuePubkey)} target="_blank" rel="noreferrer">{short(s.venuePubkey)}</a>
-          </>
-        )}
-        <br />Solana devnet · no custom program · enforcement by SPL Token delegate + revoke.
+        Enforcement here is <strong>pre-flight</strong>: the mandate is checked against a real devnet simulation before
+        signing. That stops a misbehaving agent, not a compromised one — moving these constraints into an audited
+        program is the next layer, and it is stated plainly in the README rather than implied away.
+        <br />The cumulative spend ceiling is deliberately <em>not</em> our contribution; the Foundation&apos;s
+        Allowances program shipped that, audited, in June 2026.
       </footer>
     </div>
   );
